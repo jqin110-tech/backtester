@@ -12,9 +12,12 @@ A pandas script in two parts that downloads daily stock prices from Yahoo Financ
 python3 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
-python backtester.py
+
+python -m backtester --ticker AAPL --fast 20 --slow 50 --start 2018-01-01
+python -m backtester --ticker MU AVGO MRVL --start 2016-01-01 --end 2026-09-01 --ml
+python -m pytest
 ```
 
-It needs an internet connection to download prices. Results are printed to the terminal.
+The first run downloads prices from Yahoo Finance and caches them in `data_cache/`. Later runs with the same dates read the cache. Use `--refresh` to download again.
 
-This is a learning project, not trading advice.
+This is a research project, not trading advice.
