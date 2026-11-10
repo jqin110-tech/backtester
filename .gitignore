@@ -13,3 +13,7 @@ __pycache__/
 
 # macOS
 .DS_Store
+
+# Local price cache (re-downloadable)
+data_cache/
+.pytest_cache/

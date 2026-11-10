@@ -1,0 +1,5 @@
+[tool.pytest.ini_options]
+# Lets tests `import backtester` without installing the package.
+pythonpath = ["."]
+testpaths = ["tests"]
+filterwarnings = ["ignore:urllib3 v2 only supports OpenSSL"]
