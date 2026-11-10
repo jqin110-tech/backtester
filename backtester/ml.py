@@ -14,7 +14,8 @@ recompute features on truncated data without the target getting in the way.
 import numpy as np
 import pandas as pd
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.metrics import accuracy_score
+from sklearn.inspection import permutation_importance
+from sklearn.metrics import accuracy_score, confusion_matrix, precision_score, recall_score
 
 HORIZON = 5     # days the target looks ahead
 N_FOLDS = 5
@@ -115,6 +116,17 @@ def walk_forward(dataset, n_folds=N_FOLDS, purge=HORIZON, random_state=42):
     """Train and test a RandomForest on each walk-forward fold. Every number
     returned is OUT-OF-SAMPLE (measured on test rows the model never saw).
 
+    Returns a dict:
+      "folds":      one row per fold: accuracy, precision, recall, baselines
+      "confusion":  {fold: 2x2 array}, rows = actual (0, 1), cols = predicted (0, 1)
+      "importance": per-feature impurity and permutation importance, averaged
+                    over folds
+
+    Precision/recall are for class 1 ("volatility expands"):
+      precision = of the days we predicted expansion, the share that expanded
+      recall    = of the days that expanded, the share we caught
+    Accuracy alone hides a model that just predicts the common class.
+
     Two baselines, because beating a weak baseline proves little:
     - majority: always guess the most common class OF THE TEST FOLD. It peeks
       at test labels, so it is an upper bound on any constant guess. That
@@ -123,29 +135,55 @@ def walk_forward(dataset, n_folds=N_FOLDS, purge=HORIZON, random_state=42):
       10-day vol is below its TRAINING-period median. It captures pure mean
       reversion of volatility. If the forest can't beat this, the forest
       hasn't learned much beyond "low vol tends to rise".
+
+    Two importances, because they answer different questions:
+    - impurity (built into the forest, computed on TRAINING data): how much
+      each feature was used for splits. Biased toward continuous, noisy
+      features.
+    - permutation (computed on TEST data): how much test accuracy drops when
+      one feature's values are shuffled. Closer to "does this feature carry
+      out-of-sample information?"
     """
-    rows = []
+    fold_rows, confusion, impurity, permutation = [], {}, [], []
     for fold, (train_end, test_start, test_end) in enumerate(
             fold_bounds(len(dataset), n_folds, purge), start=1):
         train = dataset.iloc[:train_end]
         test = dataset.iloc[test_start:test_end]
-        y_test = test["Target"]
+        x_test, y_test = test[FEATURES], test["Target"]
 
         model = RandomForestClassifier(n_estimators=200, max_depth=5,
                                        random_state=random_state, n_jobs=-1)
         model.fit(train[FEATURES], train["Target"])
-        predictions = model.predict(test[FEATURES])
+        predictions = model.predict(x_test)
 
         vol_threshold = train["Volatility_10d"].median()
         rule_predictions = (test["Volatility_10d"] < vol_threshold).astype(int)
 
-        rows.append({
+        fold_rows.append({
             "fold": fold,
             "test_start": test.index[0].date(),
             "test_end": test.index[-1].date(),
             "n_test": len(test),
             "model_acc": accuracy_score(y_test, predictions),
+            "precision": precision_score(y_test, predictions, zero_division=0),
+            "recall": recall_score(y_test, predictions, zero_division=0),
             "majority_acc": max(y_test.mean(), 1 - y_test.mean()),
             "vol_rule_acc": accuracy_score(y_test, rule_predictions),
         })
-    return pd.DataFrame(rows).set_index("fold")
+        confusion[fold] = confusion_matrix(y_test, predictions, labels=[0, 1])
+
+        impurity.append(model.feature_importances_)
+        permuted = permutation_importance(model, x_test, y_test, n_repeats=10,
+                                          random_state=random_state, n_jobs=-1)
+        permutation.append(permuted.importances_mean)
+
+    importance = pd.DataFrame({
+        "impurity": np.mean(impurity, axis=0),
+        "permutation": np.mean(permutation, axis=0),
+    }, index=FEATURES).sort_values("permutation", ascending=False)
+
+    return {
+        "folds": pd.DataFrame(fold_rows).set_index("fold"),
+        "confusion": confusion,
+        "importance": importance,
+    }

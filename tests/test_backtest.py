@@ -43,3 +43,35 @@ def test_trade_count_has_no_phantom_first_trade():
 def test_ma_crossover_rejects_fast_not_less_than_slow():
     with pytest.raises(ValueError):
         ma_crossover(series(range(100)), fast=50, slow=20)
+
+
+# ---- transaction costs ------------------------------------------------------
+
+def test_costs_are_charged_per_leg():
+    # Flat prices, so every bit of return is cost. Held positions 1, 1, 0, 1:
+    # legs on days 1 (entry), 3 (exit), 4 (entry) -> 3 legs * 10 bp each.
+    close = series([100] * 5)
+    signal = series([1, 1, 0, 1, 1])
+    result = run_backtest(close, signal, cost_bps=10)
+    assert result["strategy_return"].tolist() == pytest.approx([-0.001, 0.0, -0.001, -0.001])
+
+
+def test_buy_and_hold_pays_one_entry_cost():
+    close = series([100] * 5)
+    result = run_backtest(close, series([1] * 5), cost_bps=10)
+    assert result["benchmark_return"].sum() == pytest.approx(-0.001)
+
+
+def test_zero_cost_matches_frictionless():
+    close = series([100, 105, 103, 108, 110, 107])
+    signal = series([1, 0, 1, 1, 0, 1])
+    assert run_backtest(close, signal, cost_bps=0)["strategy_return"].tolist() == \
+        pytest.approx((signal.shift(1) * close.pct_change()).dropna().tolist())
+
+
+def test_split_by_date_has_no_overlap_and_loses_no_rows():
+    from backtester.backtest import split_by_date
+    result = run_backtest(series(range(100, 120)), series([1] * 20))
+    in_sample, out_of_sample = split_by_date(result, result.index[10])
+    assert len(in_sample) + len(out_of_sample) == len(result)
+    assert in_sample.index.max() < out_of_sample.index.min()
